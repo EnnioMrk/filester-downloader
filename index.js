@@ -198,9 +198,8 @@ const server = Bun.serve({
                         message: `Discovered ${actualTotal} file-items across all pages`,
                     });
 
-                    const fileDataPromises = [];
                     const metadataStart = Date.now();
-
+                    const files = [];
                     for (const [index, item] of allItems.entries()) {
                         const onclick = item.getAttribute('onclick') || '';
                         const match = onclick.match(/window\.location\.href='\/d\/([^']+)'/);
@@ -218,35 +217,29 @@ const server = Bun.serve({
                             elapsed: parseFloat(elapsed),
                         });
 
-                        fileDataPromises.push(
-                            fetchWithRetry(`${apiBase}/v2/api/public/download`, {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    ...headers,
-                                    'Origin': apiBase,
-                                    'Referer': apiBase + '/',
-                                },
-                                body: JSON.stringify({ file_slug: fileSlug }),
-                            }, MAX_RETRIES, sessionId, 'resolving_metadata').then(async res => {
-                                if (!res) return null;
-                                return await res.json();
-                            }).then(data => {
-                                if (data && data.success) {
-                                    return {
-                                        name: data.name,
-                                        server: data.server,
-                                        file: data.file,
-                                        token: data.token,
-                                    };
-                                }
-                                return null;
-                            })
-                        );
-                    }
+                        const res = await fetchWithRetry(`${apiBase}/v2/api/public/download`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                ...headers,
+                                'Origin': apiBase,
+                                'Referer': apiBase + '/',
+                            },
+                            body: JSON.stringify({ file_slug: fileSlug }),
+                        }, MAX_RETRIES, sessionId, 'resolving_metadata');
 
-                    const fileResults = await Promise.all(fileDataPromises);
-                    const files = fileResults.filter(Boolean);
+                        if (res) {
+                            const data = await res.json();
+                            if (data && data.success) {
+                                files.push({
+                                    name: data.name,
+                                    server: data.server,
+                                    file: data.file,
+                                    token: data.token,
+                                });
+                            }
+                        }
+                    }
 
                     const metadataElapsed = ((Date.now() - metadataStart) / 1000).toFixed(1);
                     await sendProgress(sessionId, {
