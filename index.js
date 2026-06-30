@@ -6,14 +6,42 @@ const indexHtml = Bun.file('./public/index.html');
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 const progressStreams = new Map();
+const sessions = new Map();
 
 function createProgressStream(sessionId) {
-    if (progressStreams.has(sessionId)) {
+    if (sessions.has(sessionId)) {
         return null;
     }
+    const controller = new AbortController();
     const { readable, writable } = new TransformStream();
+    sessions.set(sessionId, { controller, writable });
     progressStreams.set(sessionId, writable);
-    return { readable, writable };
+    return { readable, writable, signal: controller.signal };
+}
+
+function cleanupSession(sessionId, withAbort = false) {
+    const session = sessions.get(sessionId);
+    if (session) {
+        if (withAbort && !session.controller.signal.aborted) {
+            session.controller.abort();
+        }
+        const writable = session.writable;
+        progressStreams.delete(sessionId);
+        sessions.delete(sessionId);
+        if (writable) {
+            try {
+                writable.getWriter().close();
+            } catch {}
+        }
+    }
+}
+
+function getSession(sessionId) {
+    return sessions.get(sessionId);
+}
+
+function generateSessionId() {
+    return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
 async function sendProgress(sessionId, event) {
@@ -25,20 +53,6 @@ async function sendProgress(sessionId, event) {
         await writer.write(new TextEncoder().encode(data));
         writer.releaseLock();
     } catch {}
-}
-
-function cleanupSession(sessionId) {
-    const writable = progressStreams.get(sessionId);
-    if (writable) {
-        try {
-            writable.getWriter().close();
-        } catch {}
-        progressStreams.delete(sessionId);
-    }
-}
-
-function generateSessionId() {
-    return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
 async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES, sessionId = null, phase = null) {
@@ -57,6 +71,7 @@ async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES, sessionI
                 await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
             }
         } catch (err) {
+            if (err.name === 'AbortError') throw err;
             if (attempt < retries) {
                 if (sessionId && phase) {
                     await sendProgress(sessionId, {
@@ -74,6 +89,19 @@ async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES, sessionI
 
 const server = Bun.serve({
     routes: {
+        '/api/abort': {
+            async POST(req) {
+                try {
+                    const body = await req.json();
+                    const sessionId = body.sessionId;
+                    if (!sessionId) return new Response('Missing sessionId', { status: 400 });
+                    cleanupSession(sessionId, true);
+                    return new Response('OK');
+                } catch {
+                    return new Response('Error', { status: 400 });
+                }
+            },
+        },
         '/api/stream': {
             async GET(req) {
                 const url = new URL(req.url);
@@ -85,7 +113,7 @@ const server = Bun.serve({
                     return new Response('Session already in progress', { status: 409 });
                 }
 
-                const { readable } = stream;
+                const { readable, signal } = stream;
 
                 const heartbeat = setInterval(() => {
                     sendProgress(sessionId, { type: 'heartbeat' });
@@ -93,7 +121,7 @@ const server = Bun.serve({
 
                 const onAbort = () => {
                     clearInterval(heartbeat);
-                    cleanupSession(sessionId);
+                    cleanupSession(sessionId, true);
                 };
 
                 if (req.signal) {
@@ -124,8 +152,11 @@ const server = Bun.serve({
                         'Accept-Language': 'en-US,en;q=0.5',
                     };
 
+                    const session = getSession(sessionId);
+                    const signal = session ? session.controller.signal : null;
+
                     const fetchPageUrl = async (targetUrl) => {
-                        const pageRes = await fetchWithRetry(targetUrl, { headers }, MAX_RETRIES, sessionId, 'fetching_pages');
+                        const pageRes = await fetchWithRetry(targetUrl, { headers, signal }, MAX_RETRIES, sessionId, 'fetching_pages');
                         if (!pageRes) return null;
                         const html = await pageRes.text();
                         return parse(html);
@@ -165,6 +196,11 @@ const server = Bun.serve({
                     const roots = [firstRoot];
 
                     for (let page = 2; page <= totalPages; page++) {
+                        if (signal && signal.aborted) {
+                            cleanupSession(sessionId);
+                            return Response.json({ error: 'Aborted' }, { status: 400 });
+                        }
+
                         await sendProgress(sessionId, {
                             type: 'progress',
                             phase: 'fetching_pages',
@@ -201,6 +237,11 @@ const server = Bun.serve({
                     const metadataStart = Date.now();
                     const files = [];
                     for (const [index, item] of allItems.entries()) {
+                        if (signal && signal.aborted) {
+                            cleanupSession(sessionId);
+                            return Response.json({ error: 'Aborted' }, { status: 400 });
+                        }
+
                         const onclick = item.getAttribute('onclick') || '';
                         const match = onclick.match(/window\.location\.href='\/d\/([^']+)'/);
                         if (!match) continue;
@@ -226,6 +267,7 @@ const server = Bun.serve({
                                 'Referer': apiBase + '/',
                             },
                             body: JSON.stringify({ file_slug: fileSlug }),
+                            signal,
                         }, MAX_RETRIES, sessionId, 'resolving_metadata');
 
                         if (res) {
@@ -254,7 +296,10 @@ const server = Bun.serve({
                     return Response.json({ files, sessionId });
                 } catch (err) {
                     cleanupSession(sessionId);
-                    return Response.json({ error: err.message }, { status: 400 });
+                    if (err.name !== 'AbortError') {
+                        return Response.json({ error: err.message }, { status: 400 });
+                    }
+                    return Response.json({ error: 'Aborted' }, { status: 400 });
                 }
             },
         },
@@ -271,6 +316,9 @@ const server = Bun.serve({
                         return Response.json({ error: 'No files provided' }, { status: 400 });
                     }
 
+                    const session = getSession(sessionId);
+                    const signal = session ? session.controller.signal : null;
+
                     await sendProgress(sessionId, {
                         type: 'progress',
                         phase: 'downloading',
@@ -286,6 +334,11 @@ const server = Bun.serve({
 
                     const downloadResults = [];
                     for (const file of files) {
+                        if (signal && signal.aborted) {
+                            cleanupSession(sessionId);
+                            return Response.json({ error: 'Aborted' }, { status: 400 });
+                        }
+
                         const downloadUrl = `${file.server}/v2/${file.file}?token=${file.token}&download=true&n=${encodeURIComponent(file.name)}`;
 
                         const res = await fetchWithRetry(downloadUrl, {
@@ -294,6 +347,7 @@ const server = Bun.serve({
                                 'Origin': file.server,
                                 'Referer': file.server + '/',
                             },
+                            signal,
                         }, MAX_RETRIES, sessionId, 'downloading');
 
                         if (!res) {
@@ -364,7 +418,10 @@ const server = Bun.serve({
                     });
                 } catch (err) {
                     cleanupSession(sessionId);
-                    return Response.json({ error: err.message }, { status: 400 });
+                    if (err.name !== 'AbortError') {
+                        return Response.json({ error: err.message }, { status: 400 });
+                    }
+                    return Response.json({ error: 'Aborted' }, { status: 400 });
                 }
             },
         },

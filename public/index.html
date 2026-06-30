@@ -397,6 +397,18 @@
         document.getElementById('url').addEventListener('keydown', e => {
             if (e.key === 'Enter') fetchFiles();
         });
+
+        window.addEventListener('beforeunload', () => {
+            if (sessionId && isRunning) {
+                const url = '/api/abort';
+                const body = JSON.stringify({ sessionId });
+                if (navigator.sendBeacon) {
+                    navigator.sendBeacon(url, body);
+                } else {
+                    fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'application/json' }, keepalive: true });
+                }
+            }
+        });
     </script>
 </body>
 </html>
