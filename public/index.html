@@ -10,7 +10,7 @@
             font-family: system-ui, -apple-system, sans-serif;
             max-width: 800px;
             margin: 2rem auto;
-            padding: 0 1rem;
+            padding: 0 1rem 8rem;
             background: #0f172a;
             color: #e2e8f0;
             min-height: 100vh;
@@ -80,17 +80,20 @@
             align-items: center;
             gap: 0.25rem;
         }
-        .btn-download {
-            background: #22c55e;
-            color: white;
-        }
+        .btn-download { background: #22c55e; color: white; }
         .btn-download:hover { background: #16a34a; }
-        .btn-copy {
-            background: #475569;
-            color: white;
-        }
+        .btn-download:disabled { background: #64748b; cursor: not-allowed; }
+        .btn-copy { background: #475569; color: white; }
         .btn-copy:hover { background: #334155; }
-        .status { color: #64748b; font-size: 0.85rem; }
+        .file-status {
+            width: 100%;
+            font-size: 0.8rem;
+            margin-top: 0.25rem;
+        }
+        .file-status.idle { color: #64748b; }
+        .file-status.downloading { color: #3b82f6; }
+        .file-status.done { color: #22c55e; }
+        .file-status.error { color: #fca5a5; }
         .error {
             background: #7f1d1d;
             border: 1px solid #991b1b;
@@ -143,30 +146,12 @@
             color: #e2e8f0;
             word-break: break-word;
         }
-        .history-entry:last-child {
-            border-bottom: none;
-        }
-        .history-entry.history-done {
-            color: #22c55e;
-            font-weight: 500;
-        }
-        .history-entry.history-error {
-            color: #fecaca;
-        }
-        .action-bar {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-            margin-top: 1rem;
-            margin-bottom: 1rem;
-        }
-        .action-bar button {
-            flex: 1 1 auto;
-            min-width: 140px;
-        }
+        .history-entry:last-child { border-bottom: none; }
+        .history-entry.history-done { color: #22c55e; font-weight: 500; }
+        .history-entry.history-error { color: #fecaca; }
         .toast {
             position: fixed;
-            bottom: 1.5rem;
+            bottom: 7rem;
             left: 50%;
             transform: translateX(-50%);
             background: #22c55e;
@@ -184,46 +169,59 @@
             font-size: 0.75rem;
             color: #94a3b8;
             word-break: break-all;
-            padding: 0.2rem 0 0.6rem 0;
+            padding: 0.1rem 0 0.5rem 0.5rem;
             cursor: pointer;
         }
         .file-url-row:hover { color: #e2e8f0; }
+        .floating-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #1e293b;
+            border-top: 2px solid #334155;
+            padding: 0.75rem 1rem;
+            display: none;
+            z-index: 100;
+            box-shadow: 0 -4px 16px rgba(0,0,0,0.35);
+        }
+        .floating-bar-inner {
+            max-width: 800px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .floating-bar .progress-message {
+            flex: 1 1 200px;
+            margin: 0;
+            font-size: 0.85rem;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .floating-bar .progress-time {
+            margin: 0;
+            font-size: 0.8rem;
+            color: #94a3b8;
+            white-space: nowrap;
+        }
+        .floating-bar button {
+            white-space: nowrap;
+            font-size: 0.85rem;
+            padding: 0.5rem 1rem;
+        }
         @media (max-width: 600px) {
-            body {
-                margin: 1rem auto;
-                padding: 0 0.75rem;
-            }
-            .input-group {
-                flex-direction: column;
-                gap: 0.5rem;
-            }
-            .input-group button {
-                width: 100%;
-            }
-            .file-item {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            .file-name {
-                flex: 1 1 auto;
-                width: 100%;
-                margin-right: 0;
-            }
-            .file-actions {
-                width: 100%;
-                justify-content: stretch;
-            }
-            .file-actions button, .file-actions a {
-                flex: 1;
-                justify-content: center;
-                text-align: center;
-            }
-            .action-bar {
-                flex-direction: column;
-            }
-            .action-bar button {
-                width: 100%;
-            }
+            body { margin: 1rem auto; padding: 0 0.75rem 8rem; }
+            .input-group { flex-direction: column; gap: 0.5rem; }
+            .input-group button { width: 100%; }
+            .file-item { flex-direction: column; align-items: flex-start; }
+            .file-name { flex: 1 1 auto; width: 100%; }
+            .file-actions { width: 100%; justify-content: stretch; }
+            .file-actions button { flex: 1; justify-content: center; text-align: center; }
+            .floating-bar-inner { flex-direction: column; align-items: stretch; }
         }
     </style>
 </head>
@@ -245,28 +243,31 @@
     <div id="files" class="files"></div>
     <div id="toast" class="toast"></div>
 
+    <div id="floating-bar" class="floating-bar">
+        <div class="floating-bar-inner">
+            <div id="floating-message" class="progress-message"></div>
+            <div id="floating-time" class="progress-time">0s</div>
+            <button id="zip-btn" onclick="downloadAllZip()">Download All (ZIP)</button>
+        </div>
+    </div>
+
     <script>
         let eventSource = null;
         let sessionId = null;
-        let isRunning = false;
-        let reconnectTimer = null;
-        let nextReconnectDelay = 0;
         let fetchedFiles = [];
+        let nextReconnectDelay = 0;
+        let reconnectTimer = null;
         const downloadStates = new Map();
 
         function connectStream(sid) {
-            if (eventSource) {
-                eventSource.close();
-            }
+            if (eventSource) eventSource.close();
 
             eventSource = new EventSource(`/api/stream?sessionId=${sid}`);
 
             eventSource.onopen = () => {
                 nextReconnectDelay = 0;
                 const btn = document.getElementById('fetch');
-                if (btn) {
-                    btn.textContent = 'Running...';
-                }
+                if (btn) btn.textContent = 'Running...';
             };
 
             eventSource.onmessage = (e) => {
@@ -280,17 +281,20 @@
                 eventSource.close();
                 eventSource = null;
 
-                if (isRunning) {
-                    const delay = nextReconnectDelay;
-                    nextReconnectDelay = 500;
-                    reconnectTimer = setTimeout(() => {
-                        reconnectTimer = null;
-                        if (isRunning) {
-                            connectStream(sid);
-                        }
-                    }, delay);
-                }
+                const delay = nextReconnectDelay;
+                nextReconnectDelay = 500;
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
+                    if (sessionId && !eventSource) connectStream(sessionId);
+                }, delay);
             };
+        }
+
+        function updateFloatingProgress(message, elapsed) {
+            document.getElementById('floating-message').textContent = message || '';
+            if (elapsed !== undefined) {
+                document.getElementById('floating-time').textContent = `${elapsed.toFixed(1)}s`;
+            }
         }
 
         function resetProgress() {
@@ -302,9 +306,7 @@
                 document.getElementById('progress-message').textContent = '';
                 document.getElementById('progress-time').textContent = '';
             }
-            if (history) {
-                history.innerHTML = '';
-            }
+            if (history) history.innerHTML = '';
         }
 
         function addLogEntry(text, type) {
@@ -316,9 +318,7 @@
             if (type === 'error') entry.classList.add('history-error');
             entry.textContent = text;
             history.prepend(entry);
-            while (history.children.length > 50) {
-                history.removeChild(history.lastChild);
-            }
+            while (history.children.length > 50) history.removeChild(history.lastChild);
         }
 
         function updateProgress(data) {
@@ -328,68 +328,83 @@
             const time = document.getElementById('progress-time');
 
             if (!container || !bar || !msg || !time) return;
-
             container.style.display = 'block';
 
-            if (data.type === 'heartbeat') {
-                return;
-            }
+            if (data.type === 'heartbeat') return;
 
             if (data.type === 'progress') {
+                const isZipPhase = data.phase === 'downloading' || data.phase === 'packing';
+                if (isZipPhase) showFloatingBar(true);
+                updateFloatingProgress(data.message, data.elapsed);
+
                 const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
                 bar.style.width = percent + '%';
                 msg.textContent = data.message || '';
 
-                const remaining = data.total - data.current;
                 let eta = '--';
-                if (data.elapsed && data.elapsed > 0 && data.current > 0 && remaining > 0) {
-                    const etaSeconds = ((data.elapsed / data.current) * remaining).toFixed(1);
-                    eta = `~${Math.ceil(parseFloat(etaSeconds))}s`;
+                if (data.elapsed && data.elapsed > 0 && data.current > 0 && data.total > data.current) {
+                    const remaining = data.total - data.current;
+                    const etaSec = ((data.elapsed / data.current) * remaining);
+                    eta = `~${Math.ceil(etaSec)}s`;
                 }
                 time.textContent = `${percent}% · ${data.current}/${data.total} · ETA ${eta}`;
 
-                const message = data.message || '';
+                if (data.phase === 'downloading_item') {
+                    if (data.current === data.total && data.total > 0) {
+                        const slug = data.message.replace('Downloaded: ', '');
+                        setFileStatus(slug, 'done', 'Downloaded ✓');
+                    } else if (data.message.startsWith('Failed:')) {
+                        const slug = data.message.replace('Failed: ', '');
+                        setFileStatus(slug, 'error', 'Failed ✗');
+                    }
+                }
+
                 const loggable =
-                    message.startsWith('Page info:') ||
-                    message.startsWith('Discovered') ||
-                    message.startsWith('Resolved') ||
-                    message.startsWith('Packed') ||
-                    message.startsWith('Starting download') ||
+                    data.message.startsWith('Page info:') ||
+                    data.message.startsWith('Discovered') ||
+                    data.message.startsWith('Resolved') ||
+                    data.message.startsWith('Packed') ||
+                    data.message.startsWith('Starting download') ||
                     (data.current === data.total && data.total > 0);
 
-                if (loggable) {
-                    addLogEntry(message, 'progress');
-                }
+                if (loggable) addLogEntry(data.message, 'progress');
             } else if (data.type === 'info') {
                 msg.textContent = data.message || '';
-                if (data.message && !data.message.includes('Attempt ')) {
-                    addLogEntry(data.message, 'info');
-                }
+                if (data.message && !data.message.includes('Attempt ')) addLogEntry(data.message, 'info');
             } else if (data.type === 'done') {
                 bar.style.width = '100%';
                 time.textContent = '100% · Complete';
                 msg.textContent = data.message || 'Done';
                 addLogEntry(data.message || 'All done', 'done');
+                const zipBtn = document.getElementById('zip-btn');
+                if (zipBtn) zipBtn.disabled = false;
+            }
+        }
+
+        function setFileStatus(slug, status, text) {
+            downloadStates.set(slug, status);
+            const row = document.querySelector(`[data-slug="${CSS.escape(slug)}"] .file-status`);
+            if (row) {
+                row.className = 'file-status ' + status;
+                row.textContent = text;
+            }
+            const btn = document.querySelector(`[data-slug="${CSS.escape(slug)}"] .btn-download`);
+            if (btn && status === 'done') {
+                btn.textContent = 'Download Again';
+                btn.disabled = false;
             }
         }
 
         function showError(msg) {
-            const el = document.getElementById('error');
-            el.textContent = msg;
-            el.style.display = 'block';
+            document.getElementById('error').textContent = msg;
+            document.getElementById('error').style.display = 'block';
         }
 
         function showToast(msg) {
             const toast = document.getElementById('toast');
             toast.textContent = msg;
             toast.classList.add('show');
-            setTimeout(() => {
-                toast.classList.remove('show');
-            }, 2000);
-        }
-
-        function escapeHtml(str) {
-            return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+            setTimeout(() => toast.classList.remove('show'), 2000);
         }
 
         function buildDirectUrl(file) {
@@ -399,72 +414,25 @@
         function renderFiles(files) {
             const filesEl = document.getElementById('files');
             filesEl.innerHTML = '';
-
             if (files.length === 0) {
-                filesEl.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:1rem;">No files found</div>';
+                filesEl.innerHTML = '<div style="color:#94a3b8;text-align:center;padding:1rem;">No files found</div>';
                 return;
             }
 
-            const actionBar = document.createElement('div');
-            actionBar.className = 'action-bar';
-
             const copyBtn = document.createElement('button');
-            copyBtn.textContent = 'Copy All Links (for any download manager)';
+            copyBtn.className = 'btn-copy';
+            copyBtn.textContent = 'Copy All Links';
+            copyBtn.style.marginBottom = '0.75rem';
             copyBtn.onclick = () => {
                 const links = files.map(f => buildDirectUrl(f)).join('\n');
-                navigator.clipboard.writeText(links).then(() => {
-                    showToast('Links copied — paste into JDownloader, IDM, etc.');
-                }).catch(() => {
-                    showToast('Failed to copy');
-                });
+                navigator.clipboard.writeText(links).then(() => showToast('Links copied')).catch(() => showToast('Failed to copy'));
             };
-
-            const zipBtn = document.createElement('button');
-            zipBtn.textContent = `Download ZIP (${files.length})`;
-            zipBtn.onclick = async () => {
-                zipBtn.disabled = true;
-                zipBtn.textContent = 'Preparing ZIP...';
-
-                const folderMatch = (document.getElementById('url').value || '').match(/\/f\/([^?]+)/);
-                const folderName = folderMatch ? folderMatch[1] : 'files';
-
-                try {
-                    const zipRes = await fetch('/api/download-zip', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ files, folderName, sessionId }),
-                    });
-
-                    if (!zipRes.ok) {
-                        const errData = await zipRes.json().catch(() => ({}));
-                        throw new Error(errData.error || 'Failed to create zip');
-                    }
-
-                    const zipBlob = await zipRes.blob();
-                    const zipUrl = URL.createObjectURL(zipBlob);
-                    const a = document.createElement('a');
-                    a.href = zipUrl;
-                    a.download = folderName + '.zip';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    setTimeout(() => URL.revokeObjectURL(zipUrl), 5000);
-                    showToast('ZIP download started');
-                } catch (err) {
-                    showError(err.message);
-                } finally {
-                    zipBtn.disabled = false;
-                    zipBtn.textContent = `Download ZIP (${files.length})`;
-                }
-            };
-
-            actionBar.appendChild(copyBtn);
-            actionBar.appendChild(zipBtn);
-            filesEl.appendChild(actionBar);
+            filesEl.appendChild(copyBtn);
 
             for (const file of files) {
                 const div = document.createElement('div');
                 div.className = 'file-item';
+                div.dataset.slug = file.file;
 
                 const nameSpan = document.createElement('span');
                 nameSpan.className = 'file-name';
@@ -474,65 +442,44 @@
                 const actions = document.createElement('div');
                 actions.className = 'file-actions';
 
-                const statusSpan = document.createElement('span');
-                statusSpan.className = 'status';
-
                 const downloadBtn = document.createElement('button');
                 downloadBtn.className = 'btn-download';
                 downloadBtn.textContent = 'Download';
 
-                const startDownload = () => {
-                    const directUrl = buildDirectUrl(file);
-                    const iframe = document.createElement('iframe');
-                    iframe.style.display = 'none';
-                    iframe.src = directUrl;
-                    document.body.appendChild(iframe);
-                    setTimeout(() => iframe.remove(), 15000);
-
-                    downloadStates.set(file.file, 'downloading');
-                    downloadBtn.textContent = 'Downloading...';
+                downloadBtn.onclick = async () => {
+                    if (downloadStates.get(file.file) === 'downloading') return;
                     downloadBtn.disabled = true;
-                    statusSpan.textContent = 'In browser download manager';
-                    statusSpan.style.color = '#3b82f6';
+                    downloadBtn.textContent = 'Downloading...';
+                    setFileStatus(file.file, 'downloading', 'Downloading...');
 
-                    setTimeout(() => {
-                        if (downloadStates.get(file.file) === 'downloading') {
-                            downloadStates.set(file.file, 'done');
-                            downloadBtn.textContent = 'Download Again';
-                            downloadBtn.disabled = false;
-                            statusSpan.textContent = 'Done ✅';
-                            statusSpan.style.color = '#22c55e';
+                    try {
+                        const res = await fetch('/api/download-item', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sessionId, file }),
+                        });
+                        if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            setFileStatus(file.file, 'error', 'Failed: ' + (err.error || ''));
                         }
-                    }, 3000);
+                    } catch {
+                        setFileStatus(file.file, 'error', 'Network error');
+                    }
                 };
 
-                downloadBtn.onclick = startDownload;
-
-                const retryBtn = document.createElement('button');
-                retryBtn.className = 'btn-copy';
-                retryBtn.textContent = 'Retry';
-                retryBtn.style.display = 'none';
-                retryBtn.onclick = () => {
-                    downloadStates.set(file.file, 'idle');
-                    retryBtn.style.display = 'none';
-                    startDownload();
-                };
-
-                const copyBtn = document.createElement('button');
-                copyBtn.className = 'btn-copy';
-                copyBtn.textContent = 'Copy Link';
-                copyBtn.onclick = () => {
-                    const directUrl = buildDirectUrl(file);
-                    navigator.clipboard.writeText(directUrl).then(() => {
-                        showToast('Link copied — paste into JDownloader, IDM, etc.');
-                    }).catch(() => {
-                        showToast('Failed to copy');
-                    });
+                const copyLinkBtn = document.createElement('button');
+                copyLinkBtn.className = 'btn-copy';
+                copyLinkBtn.textContent = 'Copy Link';
+                copyLinkBtn.onclick = () => {
+                    navigator.clipboard.writeText(buildDirectUrl(file)).then(() => showToast('Direct link copied')).catch(() => showToast('Failed to copy'));
                 };
 
                 actions.appendChild(downloadBtn);
-                actions.appendChild(retryBtn);
-                actions.appendChild(copyBtn);
+                actions.appendChild(copyLinkBtn);
+
+                const statusSpan = document.createElement('span');
+                statusSpan.className = 'file-status idle';
+                statusSpan.textContent = '';
 
                 div.appendChild(nameSpan);
                 div.appendChild(actions);
@@ -541,19 +488,52 @@
 
                 const urlRow = document.createElement('div');
                 urlRow.className = 'file-url-row';
-                urlRow.style.cssText = 'font-size:0.75rem;color:#94a3b8;word-break:break-all;padding:0.2rem 0 0.6rem 0;cursor:pointer;';
                 urlRow.textContent = buildDirectUrl(file);
                 urlRow.title = 'Click to copy direct download link';
                 urlRow.onclick = () => {
-                    navigator.clipboard.writeText(buildDirectUrl(file)).then(() => {
-                        showToast('Direct link copied');
-                    }).catch(() => {
-                        showToast('Failed to copy');
-                    });
+                    navigator.clipboard.writeText(buildDirectUrl(file)).then(() => showToast('Direct link copied')).catch(() => showToast('Failed to copy'));
                 };
                 filesEl.appendChild(urlRow);
 
                 downloadStates.set(file.file, 'idle');
+            }
+        }
+
+        async function downloadAllZip() {
+            const zipBtn = document.getElementById('zip-btn');
+            zipBtn.disabled = true;
+            zipBtn.textContent = 'Downloading ZIP...';
+
+            const folderMatch = (document.getElementById('url').value || '').match(/\/f\/([^?]+)/);
+            const folderName = folderMatch ? folderMatch[1] : 'files';
+
+            try {
+                const res = await fetch('/api/download-all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files: fetchedFiles, folderName, sessionId }),
+                });
+
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.error || 'Failed to create zip');
+                }
+
+                const zipBlob = await res.blob();
+                const zipUrl = URL.createObjectURL(zipBlob);
+                const a = document.createElement('a');
+                a.href = zipUrl;
+                a.download = folderName + '.zip';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(zipUrl), 5000);
+                showToast('ZIP download started');
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                zipBtn.disabled = false;
+                zipBtn.textContent = 'Download All (ZIP)';
             }
         }
 
@@ -562,20 +542,20 @@
             const errorEl = document.getElementById('error');
             const filesEl = document.getElementById('files');
             const btn = document.getElementById('fetch');
-
-            if (!url) {
-                showError('Please enter a URL');
-                return;
-            }
+            const zipBtn = document.getElementById('zip-btn');
+            if (!url) { showError('Please enter a URL'); return; }
 
             errorEl.style.display = 'none';
             filesEl.innerHTML = '';
             resetProgress();
+            showFloatingBar(false);
+            if (zipBtn) { zipBtn.disabled = true; zipBtn.textContent = 'Download All (ZIP)'; }
             fetchedFiles = [];
+            downloadStates.clear();
 
             sessionId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-            isRunning = true;
+            if (eventSource) { eventSource.close(); eventSource = null; }
             connectStream(sessionId);
 
             btn.disabled = true;
@@ -585,7 +565,7 @@
                 const res = await fetch('/api/files', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url, sessionId })
+                    body: JSON.stringify({ url, sessionId }),
                 });
                 const data = await res.json();
 
@@ -596,36 +576,24 @@
                 fetchedFiles = data.files;
                 renderFiles(fetchedFiles);
                 btn.textContent = 'Fetch Links';
+                if (zipBtn) zipBtn.disabled = false;
+                if (zipBtn) connectStream(sessionId);
             } catch (err) {
                 showError(err.message);
             } finally {
-                isRunning = false;
-                if (reconnectTimer) {
-                    clearTimeout(reconnectTimer);
-                    reconnectTimer = null;
-                }
-                if (eventSource) {
-                    eventSource.close();
-                    eventSource = null;
-                }
                 btn.disabled = false;
                 btn.textContent = 'Fetch Links';
             }
         }
 
-        document.getElementById('url').addEventListener('keydown', e => {
-            if (e.key === 'Enter') fetchFiles();
-        });
+        document.getElementById('url').addEventListener('keydown', e => { if (e.key === 'Enter') fetchFiles(); });
 
         window.addEventListener('beforeunload', () => {
-            if (sessionId && isRunning) {
+            if (sessionId && eventSource) {
                 const url = '/api/abort';
                 const body = JSON.stringify({ sessionId });
-                if (navigator.sendBeacon) {
-                    navigator.sendBeacon(url, body);
-                } else {
-                    fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'application/json' }, keepalive: true });
-                }
+                if (navigator.sendBeacon) navigator.sendBeacon(url, body);
+                else fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'application/json' }, keepalive: true });
             }
         });
     </script>
