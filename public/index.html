@@ -29,6 +29,7 @@
             background: #1e293b;
             color: #e2e8f0;
             font-size: 1rem;
+            min-width: 0;
         }
         button {
             padding: 0.6rem 1.2rem;
@@ -39,26 +40,56 @@
             font-size: 1rem;
             cursor: pointer;
             font-weight: 500;
+            white-space: nowrap;
         }
         button:hover { background: #2563eb; }
         button:disabled { background: #64748b; cursor: not-allowed; }
         .files { display: flex; flex-direction: column; gap: 0.5rem; }
         .file-item {
             display: flex;
+            flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
+            gap: 0.5rem;
             padding: 0.8rem 1rem;
             background: #1e293b;
             border: 1px solid #334155;
             border-radius: 0.5rem;
         }
         .file-name {
-            flex: 1;
+            flex: 1 1 60%;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            margin-right: 1rem;
+            min-width: 0;
         }
+        .file-actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .btn-copy, .btn-download {
+            padding: 0.4rem 0.8rem;
+            border: none;
+            border-radius: 0.375rem;
+            font-size: 0.85rem;
+            cursor: pointer;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        .btn-download {
+            background: #22c55e;
+            color: white;
+        }
+        .btn-download:hover { background: #16a34a; }
+        .btn-copy {
+            background: #475569;
+            color: white;
+        }
+        .btn-copy:hover { background: #334155; }
         .status { color: #64748b; font-size: 0.85rem; }
         .error {
             background: #7f1d1d;
@@ -67,6 +98,7 @@
             padding: 0.75rem 1rem;
             border-radius: 0.5rem;
             margin-bottom: 1rem;
+            word-break: break-word;
         }
         .progress-container {
             display: none;
@@ -76,6 +108,7 @@
             margin-bottom: 0.5rem;
             font-size: 0.9rem;
             color: #e2e8f0;
+            word-break: break-word;
         }
         .progress-bar-wrapper {
             background: #1e293b;
@@ -120,6 +153,78 @@
         .history-entry.history-error {
             color: #fecaca;
         }
+        .action-bar {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        .action-bar button {
+            flex: 1 1 auto;
+            min-width: 140px;
+        }
+        .toast {
+            position: fixed;
+            bottom: 1.5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #22c55e;
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .toast.show { opacity: 1; }
+        .file-url-row {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            word-break: break-all;
+            padding: 0.2rem 0 0.6rem 0;
+            cursor: pointer;
+        }
+        .file-url-row:hover { color: #e2e8f0; }
+        @media (max-width: 600px) {
+            body {
+                margin: 1rem auto;
+                padding: 0 0.75rem;
+            }
+            .input-group {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            .input-group button {
+                width: 100%;
+            }
+            .file-item {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .file-name {
+                flex: 1 1 auto;
+                width: 100%;
+                margin-right: 0;
+            }
+            .file-actions {
+                width: 100%;
+                justify-content: stretch;
+            }
+            .file-actions button, .file-actions a {
+                flex: 1;
+                justify-content: center;
+                text-align: center;
+            }
+            .action-bar {
+                flex-direction: column;
+            }
+            .action-bar button {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
@@ -127,7 +232,7 @@
     <div id="error" class="error" style="display: none;"></div>
     <div class="input-group">
         <input type="text" id="url" placeholder="https://filester.si/f/..." />
-        <button id="fetch" onclick="fetchFiles()">Fetch & Download All</button>
+        <button id="fetch" onclick="fetchFiles()">Fetch Links</button>
     </div>
     <div id="progress-container" class="progress-container">
         <div id="progress-message" class="progress-message"></div>
@@ -138,6 +243,7 @@
         <div id="message-history" class="message-history"></div>
     </div>
     <div id="files" class="files"></div>
+    <div id="toast" class="toast"></div>
 
     <script>
         let eventSource = null;
@@ -145,6 +251,8 @@
         let isRunning = false;
         let reconnectTimer = null;
         let nextReconnectDelay = 0;
+        let fetchedFiles = [];
+        const downloadStates = new Map();
 
         function connectStream(sid) {
             if (eventSource) {
@@ -271,8 +379,182 @@
             el.style.display = 'block';
         }
 
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2000);
+        }
+
         function escapeHtml(str) {
             return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        }
+
+        function buildDirectUrl(file) {
+            return `${file.server}/v2/${file.file}?token=${encodeURIComponent(file.token)}&download=true&n=${encodeURIComponent(file.name)}`;
+        }
+
+        function renderFiles(files) {
+            const filesEl = document.getElementById('files');
+            filesEl.innerHTML = '';
+
+            if (files.length === 0) {
+                filesEl.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:1rem;">No files found</div>';
+                return;
+            }
+
+            const actionBar = document.createElement('div');
+            actionBar.className = 'action-bar';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.textContent = 'Copy All Links (for any download manager)';
+            copyBtn.onclick = () => {
+                const links = files.map(f => buildDirectUrl(f)).join('\n');
+                navigator.clipboard.writeText(links).then(() => {
+                    showToast('Links copied — paste into JDownloader, IDM, etc.');
+                }).catch(() => {
+                    showToast('Failed to copy');
+                });
+            };
+
+            const zipBtn = document.createElement('button');
+            zipBtn.textContent = `Download ZIP (${files.length})`;
+            zipBtn.onclick = async () => {
+                zipBtn.disabled = true;
+                zipBtn.textContent = 'Preparing ZIP...';
+
+                const folderMatch = (document.getElementById('url').value || '').match(/\/f\/([^?]+)/);
+                const folderName = folderMatch ? folderMatch[1] : 'files';
+
+                try {
+                    const zipRes = await fetch('/api/download-zip', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ files, folderName, sessionId }),
+                    });
+
+                    if (!zipRes.ok) {
+                        const errData = await zipRes.json().catch(() => ({}));
+                        throw new Error(errData.error || 'Failed to create zip');
+                    }
+
+                    const zipBlob = await zipRes.blob();
+                    const zipUrl = URL.createObjectURL(zipBlob);
+                    const a = document.createElement('a');
+                    a.href = zipUrl;
+                    a.download = folderName + '.zip';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(zipUrl), 5000);
+                    showToast('ZIP download started');
+                } catch (err) {
+                    showError(err.message);
+                } finally {
+                    zipBtn.disabled = false;
+                    zipBtn.textContent = `Download ZIP (${files.length})`;
+                }
+            };
+
+            actionBar.appendChild(copyBtn);
+            actionBar.appendChild(zipBtn);
+            filesEl.appendChild(actionBar);
+
+            for (const file of files) {
+                const div = document.createElement('div');
+                div.className = 'file-item';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'file-name';
+                nameSpan.title = file.name;
+                nameSpan.textContent = file.name;
+
+                const actions = document.createElement('div');
+                actions.className = 'file-actions';
+
+                const statusSpan = document.createElement('span');
+                statusSpan.className = 'status';
+
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'btn-download';
+                downloadBtn.textContent = 'Download';
+
+                const startDownload = () => {
+                    const directUrl = buildDirectUrl(file);
+                    const iframe = document.createElement('iframe');
+                    iframe.style.display = 'none';
+                    iframe.src = directUrl;
+                    document.body.appendChild(iframe);
+                    setTimeout(() => iframe.remove(), 15000);
+
+                    downloadStates.set(file.file, 'downloading');
+                    downloadBtn.textContent = 'Downloading...';
+                    downloadBtn.disabled = true;
+                    statusSpan.textContent = 'In browser download manager';
+                    statusSpan.style.color = '#3b82f6';
+
+                    setTimeout(() => {
+                        if (downloadStates.get(file.file) === 'downloading') {
+                            downloadStates.set(file.file, 'done');
+                            downloadBtn.textContent = 'Download Again';
+                            downloadBtn.disabled = false;
+                            statusSpan.textContent = 'Done ✅';
+                            statusSpan.style.color = '#22c55e';
+                        }
+                    }, 3000);
+                };
+
+                downloadBtn.onclick = startDownload;
+
+                const retryBtn = document.createElement('button');
+                retryBtn.className = 'btn-copy';
+                retryBtn.textContent = 'Retry';
+                retryBtn.style.display = 'none';
+                retryBtn.onclick = () => {
+                    downloadStates.set(file.file, 'idle');
+                    retryBtn.style.display = 'none';
+                    startDownload();
+                };
+
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'btn-copy';
+                copyBtn.textContent = 'Copy Link';
+                copyBtn.onclick = () => {
+                    const directUrl = buildDirectUrl(file);
+                    navigator.clipboard.writeText(directUrl).then(() => {
+                        showToast('Link copied — paste into JDownloader, IDM, etc.');
+                    }).catch(() => {
+                        showToast('Failed to copy');
+                    });
+                };
+
+                actions.appendChild(downloadBtn);
+                actions.appendChild(retryBtn);
+                actions.appendChild(copyBtn);
+
+                div.appendChild(nameSpan);
+                div.appendChild(actions);
+                div.appendChild(statusSpan);
+                filesEl.appendChild(div);
+
+                const urlRow = document.createElement('div');
+                urlRow.className = 'file-url-row';
+                urlRow.style.cssText = 'font-size:0.75rem;color:#94a3b8;word-break:break-all;padding:0.2rem 0 0.6rem 0;cursor:pointer;';
+                urlRow.textContent = buildDirectUrl(file);
+                urlRow.title = 'Click to copy direct download link';
+                urlRow.onclick = () => {
+                    navigator.clipboard.writeText(buildDirectUrl(file)).then(() => {
+                        showToast('Direct link copied');
+                    }).catch(() => {
+                        showToast('Failed to copy');
+                    });
+                };
+                filesEl.appendChild(urlRow);
+
+                downloadStates.set(file.file, 'idle');
+            }
         }
 
         async function fetchFiles() {
@@ -289,6 +571,7 @@
             errorEl.style.display = 'none';
             filesEl.innerHTML = '';
             resetProgress();
+            fetchedFiles = [];
 
             sessionId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
@@ -310,75 +593,9 @@
                     throw new Error(data.error || 'Failed to fetch files');
                 }
 
-                if (data.files.length === 0) {
-                    filesEl.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:1rem;">No files found</div>';
-                    return;
-                }
-
-                btn.textContent = 'Downloading...';
-
-                const folderMatch = url.match(/\/f\/([^?]+)/);
-                const folderName = folderMatch ? folderMatch[1] : 'files';
-
-                if (data.files.length === 1) {
-                    const file = data.files[0];
-                    const div = document.createElement('div');
-                    div.className = 'file-item';
-                    div.innerHTML = `
-                        <span class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-                        <span class="status">Starting...</span>
-                    `;
-                    filesEl.appendChild(div);
-
-                    setTimeout(() => {
-                        const iframe = document.createElement('iframe');
-                        iframe.style.display = 'none';
-                        iframe.src = `/api/download?server=${encodeURIComponent(file.server)}&file=${encodeURIComponent(file.file)}&token=${encodeURIComponent(file.token)}&name=${encodeURIComponent(file.name)}`;
-                        document.body.appendChild(iframe);
-                        setTimeout(() => iframe.remove(), 15000);
-                        div.querySelector('.status').textContent = 'Started ✅';
-                        div.querySelector('.status').style.color = '#22c55e';
-                    }, 300);
-                } else {
-                    const div = document.createElement('div');
-                    div.className = 'file-item';
-                    div.innerHTML = `
-                        <span class="file-name">Downloading ${data.files.length} files as ZIP...</span>
-                        <span class="status">Preparing...</span>
-                    `;
-                    filesEl.appendChild(div);
-
-                    const zipRes = await fetch('/api/download-zip', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ files: data.files, folderName, sessionId }),
-                    });
-
-                    if (!zipRes.ok) {
-                        const errData = await zipRes.json().catch(() => ({}));
-                        throw new Error(errData.error || 'Failed to create zip');
-                    }
-
-                    const zipBlob = await zipRes.blob();
-                    const zipUrl = URL.createObjectURL(zipBlob);
-                    const a = document.createElement('a');
-                    a.href = zipUrl;
-                    a.download = folderName + '.zip';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(zipUrl);
-
-                    div.querySelector('.status').textContent = 'Done ✅';
-                    div.querySelector('.status').style.color = '#22c55e';
-
-                    data.files.forEach(file => {
-                        const fdiv = document.createElement('div');
-                        fdiv.className = 'file-item';
-                        fdiv.innerHTML = `<span class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><span class="status" style="color:#22c55e;">Packed ✅</span>`;
-                        filesEl.appendChild(fdiv);
-                    });
-                }
+                fetchedFiles = data.files;
+                renderFiles(fetchedFiles);
+                btn.textContent = 'Fetch Links';
             } catch (err) {
                 showError(err.message);
             } finally {
@@ -392,7 +609,7 @@
                     eventSource = null;
                 }
                 btn.disabled = false;
-                btn.textContent = 'Fetch & Download All';
+                btn.textContent = 'Fetch Links';
             }
         }
 
