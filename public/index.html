@@ -364,7 +364,9 @@
                     const a = document.createElement('a');
                     a.href = zipUrl;
                     a.download = folderName + '.zip';
+                    document.body.appendChild(a);
                     a.click();
+                    document.body.removeChild(a);
                     URL.revokeObjectURL(zipUrl);
 
                     div.querySelector('.status').textContent = 'Done ✅';

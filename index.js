@@ -382,9 +382,9 @@ const server = Bun.serve({
                     await sendProgress(sessionId, {
                         type: 'progress',
                         phase: 'packing',
-                        current: zip.files.length,
-                        total: Math.max(zip.files.length, files.length),
-                        message: `Packed ${zip.files.length} files into archive`,
+                        current: Object.keys(zip.files).length,
+                        total: Math.max(Object.keys(zip.files).length, files.length),
+                        message: `Packed ${Object.keys(zip.files).length} files into archive`,
                     });
 
                     const { readable, writable } = new TransformStream();
