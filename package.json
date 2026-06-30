@@ -1,0 +1,19 @@
+{
+    "name": "filester-downloader",
+    "module": "index.tjs",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "start": "bun run index.js",
+        "dev": "bun run index.js --watch"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "node-html-parser": "^8.0.4"
+    }
+}

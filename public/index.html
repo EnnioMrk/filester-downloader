@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filester Downloader</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        h1 { font-size: 1.5rem; margin-bottom: 1.5rem; }
+        .input-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 0.6rem 1rem;
+            border: 1px solid #334155;
+            border-radius: 0.5rem;
+            background: #1e293b;
+            color: #e2e8f0;
+            font-size: 1rem;
+        }
+        button {
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 0.5rem;
+            background: #3b82f6;
+            color: white;
+            font-size: 1rem;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        button:hover { background: #2563eb; }
+        button:disabled { background: #64748b; cursor: not-allowed; }
+        .files { display: flex; flex-direction: column; gap: 0.5rem; }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.8rem 1rem;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 0.5rem;
+        }
+        .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 1rem;
+        }
+        .status { color: #64748b; font-size: 0.85rem; }
+        .error {
+            background: #7f1d1d;
+            border: 1px solid #991b1b;
+            color: #fecaca;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>Filester Downloader</h1>
+    <div id="error" class="error" style="display: none;"></div>
+    <div class="input-group">
+        <input type="text" id="url" placeholder="https://filester.si/f/..." />
+        <button id="fetch" onclick="fetchFiles()">Fetch & Download All</button>
+    </div>
+    <div id="files" class="files"></div>
+
+    <script>
+        async function fetchFiles() {
+            const url = document.getElementById('url').value.trim();
+            const errorEl = document.getElementById('error');
+            const filesEl = document.getElementById('files');
+            const btn = document.getElementById('fetch');
+
+            if (!url) {
+                showError('Please enter a URL');
+                return;
+            }
+
+            errorEl.style.display = 'none';
+            filesEl.innerHTML = '';
+            btn.disabled = true;
+            btn.textContent = 'Fetching...';
+
+            try {
+                const res = await fetch('/api/files', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+
+                if (!res.ok || data.error) {
+                    throw new Error(data.error || 'Failed to fetch files');
+                }
+
+                if (data.files.length === 0) {
+                    filesEl.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:1rem;">No files found</div>';
+                    return;
+                }
+
+                btn.textContent = 'Downloading...';
+
+                data.files.forEach((file, index) => {
+                    const div = document.createElement('div');
+                    div.className = 'file-item';
+                    div.innerHTML = `
+                        <span class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+                        <span class="status">Pending...</span>
+                    `;
+                    filesEl.appendChild(div);
+
+                    setTimeout(() => {
+                        const iframe = document.createElement('iframe');
+                        iframe.style.display = 'none';
+                        iframe.src = `/api/download?server=${encodeURIComponent(file.server)}&file=${encodeURIComponent(file.file)}&token=${encodeURIComponent(file.token)}&name=${encodeURIComponent(file.name)}`;
+                        document.body.appendChild(iframe);
+                        setTimeout(() => iframe.remove(), 15000);
+
+                        div.querySelector('.status').textContent = 'Started ✅';
+                        div.querySelector('.status').style.color = '#22c55e';
+                    }, index * 300);
+                });
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Fetch & Download All';
+            }
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        }
+
+        document.getElementById('url').addEventListener('keydown', e => {
+            if (e.key === 'Enter') fetchFiles();
+        });
+    </script>
+</body>
+</html>
