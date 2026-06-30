@@ -68,6 +68,58 @@
             border-radius: 0.5rem;
             margin-bottom: 1rem;
         }
+        .progress-container {
+            display: none;
+            margin-bottom: 1.5rem;
+        }
+        .progress-message {
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            color: #e2e8f0;
+        }
+        .progress-bar-wrapper {
+            background: #1e293b;
+            border-radius: 0.5rem;
+            height: 1.5rem;
+            overflow: hidden;
+        }
+        .progress-bar {
+            background: #3b82f6;
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .progress-time {
+            margin-top: 0.3rem;
+            font-size: 0.8rem;
+            color: #94a3b8;
+        }
+        .message-history {
+            margin-top: 0.5rem;
+            max-height: 220px;
+            overflow-y: auto;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 0.5rem;
+            padding: 0.5rem;
+            font-size: 0.85rem;
+        }
+        .history-entry {
+            padding: 0.25rem 0;
+            border-bottom: 1px solid #0f172a;
+            color: #e2e8f0;
+            word-break: break-word;
+        }
+        .history-entry:last-child {
+            border-bottom: none;
+        }
+        .history-entry.history-done {
+            color: #22c55e;
+            font-weight: 500;
+        }
+        .history-entry.history-error {
+            color: #fecaca;
+        }
     </style>
 </head>
 <body>
@@ -77,9 +129,152 @@
         <input type="text" id="url" placeholder="https://filester.si/f/..." />
         <button id="fetch" onclick="fetchFiles()">Fetch & Download All</button>
     </div>
+    <div id="progress-container" class="progress-container">
+        <div id="progress-message" class="progress-message"></div>
+        <div class="progress-bar-wrapper">
+            <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <div id="progress-time" class="progress-time"></div>
+        <div id="message-history" class="message-history"></div>
+    </div>
     <div id="files" class="files"></div>
 
     <script>
+        let eventSource = null;
+        let sessionId = null;
+        let isRunning = false;
+        let reconnectTimer = null;
+        let nextReconnectDelay = 0;
+
+        function connectStream(sid) {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource(`/api/stream?sessionId=${sid}`);
+
+            eventSource.onopen = () => {
+                nextReconnectDelay = 0;
+                const btn = document.getElementById('fetch');
+                if (btn) {
+                    btn.textContent = 'Running...';
+                }
+            };
+
+            eventSource.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    updateProgress(data);
+                } catch {}
+            };
+
+            eventSource.onerror = () => {
+                eventSource.close();
+                eventSource = null;
+
+                if (isRunning) {
+                    const delay = nextReconnectDelay;
+                    nextReconnectDelay = 500;
+                    reconnectTimer = setTimeout(() => {
+                        reconnectTimer = null;
+                        if (isRunning) {
+                            connectStream(sid);
+                        }
+                    }, delay);
+                }
+            };
+        }
+
+        function resetProgress() {
+            const container = document.getElementById('progress-container');
+            const history = document.getElementById('message-history');
+            if (container) {
+                container.style.display = 'none';
+                document.getElementById('progress-bar').style.width = '0%';
+                document.getElementById('progress-message').textContent = '';
+                document.getElementById('progress-time').textContent = '';
+            }
+            if (history) {
+                history.innerHTML = '';
+            }
+        }
+
+        function addLogEntry(text, type) {
+            const history = document.getElementById('message-history');
+            if (!history) return;
+            const entry = document.createElement('div');
+            entry.className = 'history-entry';
+            if (type === 'done') entry.classList.add('history-done');
+            if (type === 'error') entry.classList.add('history-error');
+            entry.textContent = text;
+            history.prepend(entry);
+            while (history.children.length > 50) {
+                history.removeChild(history.lastChild);
+            }
+        }
+
+        function updateProgress(data) {
+            const container = document.getElementById('progress-container');
+            const bar = document.getElementById('progress-bar');
+            const msg = document.getElementById('progress-message');
+            const time = document.getElementById('progress-time');
+
+            if (!container || !bar || !msg || !time) return;
+
+            container.style.display = 'block';
+
+            if (data.type === 'heartbeat') {
+                return;
+            }
+
+            if (data.type === 'progress') {
+                const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+                bar.style.width = percent + '%';
+                msg.textContent = data.message || '';
+
+                const remaining = data.total - data.current;
+                let eta = '--';
+                if (data.elapsed && data.elapsed > 0 && data.current > 0 && remaining > 0) {
+                    const etaSeconds = ((data.elapsed / data.current) * remaining).toFixed(1);
+                    eta = `~${Math.ceil(parseFloat(etaSeconds))}s`;
+                }
+                time.textContent = `${percent}% · ${data.current}/${data.total} · ETA ${eta}`;
+
+                const message = data.message || '';
+                const loggable =
+                    message.startsWith('Page info:') ||
+                    message.startsWith('Discovered') ||
+                    message.startsWith('Resolved') ||
+                    message.startsWith('Packed') ||
+                    message.startsWith('Starting download') ||
+                    (data.current === data.total && data.total > 0);
+
+                if (loggable) {
+                    addLogEntry(message, 'progress');
+                }
+            } else if (data.type === 'info') {
+                msg.textContent = data.message || '';
+                if (data.message && !data.message.includes('Attempt ')) {
+                    addLogEntry(data.message, 'info');
+                }
+            } else if (data.type === 'done') {
+                bar.style.width = '100%';
+                time.textContent = '100% · Complete';
+                msg.textContent = data.message || 'Done';
+                addLogEntry(data.message || 'All done', 'done');
+            }
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        }
+
         async function fetchFiles() {
             const url = document.getElementById('url').value.trim();
             const errorEl = document.getElementById('error');
@@ -93,14 +288,21 @@
 
             errorEl.style.display = 'none';
             filesEl.innerHTML = '';
+            resetProgress();
+
+            sessionId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+            isRunning = true;
+            connectStream(sessionId);
+
             btn.disabled = true;
-            btn.textContent = 'Fetching...';
+            btn.textContent = 'Connecting...';
 
             try {
                 const res = await fetch('/api/files', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url })
+                    body: JSON.stringify({ url, sessionId })
                 });
                 const data = await res.json();
 
@@ -149,7 +351,7 @@
                     const zipRes = await fetch('/api/download-zip', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ files: data.files, folderName }),
+                        body: JSON.stringify({ files: data.files, folderName, sessionId }),
                     });
 
                     if (!zipRes.ok) {
@@ -178,19 +380,18 @@
             } catch (err) {
                 showError(err.message);
             } finally {
+                isRunning = false;
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+                if (eventSource) {
+                    eventSource.close();
+                    eventSource = null;
+                }
                 btn.disabled = false;
                 btn.textContent = 'Fetch & Download All';
             }
-        }
-
-        function showError(msg) {
-            const el = document.getElementById('error');
-            el.textContent = msg;
-            el.style.display = 'block';
-        }
-
-        function escapeHtml(str) {
-            return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
         }
 
         document.getElementById('url').addEventListener('keydown', e => {
