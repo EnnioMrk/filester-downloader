@@ -297,6 +297,10 @@
             }
         }
 
+        function showFloatingBar(show) {
+            document.getElementById('floating-bar').style.display = show ? 'block' : 'none';
+        }
+
         function resetProgress() {
             const container = document.getElementById('progress-container');
             const history = document.getElementById('message-history');
