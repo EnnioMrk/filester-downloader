@@ -1,12 +1,9 @@
 import { parse } from 'node-html-parser';
+import JSZip from 'jszip';
 import fs from 'node:fs';
 import path from 'path';
 
 const indexHtml = Bun.file('./public/index.html');
-
-function buildDownloadUrl(file) {
-    return `${file.server}/v2/${file.file}?token=${file.token}&download=true&n=${encodeURIComponent(file.name)}`;
-}
 
 Bun.serve({
     routes: {
@@ -74,39 +71,56 @@ Bun.serve({
                 }
             },
         },
-        '/api/download': {
-            async GET(req) {
-                const url = new URL(req.url);
-                const server = url.searchParams.get('server');
-                const file = url.searchParams.get('file');
-                const token = url.searchParams.get('token');
-                const name = url.searchParams.get('name');
+        '/api/download-zip': {
+            async POST(req) {
+                try {
+                    const body = await req.json();
+                    const files = body.files;
+                    const folderName = body.folderName || 'files';
 
-                if (!server || !file || !token || !name) {
-                    return new Response('Missing parameters', { status: 400 });
+                    if (!Array.isArray(files) || files.length === 0) {
+                        return Response.json({ error: 'No files provided' }, { status: 400 });
+                    }
+
+                    const zip = new JSZip();
+
+                    const fetchPromises = files.map(file => {
+                        const downloadUrl = `${file.server}/v2/${file.file}?token=${file.token}&download=true&n=${encodeURIComponent(file.name)}`;
+                        return fetch(downloadUrl, {
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Origin': file.server,
+                                'Referer': file.server + '/',
+                            },
+                        }).then(async res => {
+                            if (!res.ok) return null;
+                            const blob = await res.arrayBuffer();
+                            return {
+                                name: file.name,
+                                buffer: Buffer.from(blob),
+                            };
+                        });
+                    });
+
+                    const results = await Promise.all(fetchPromises);
+
+                    for (const result of results) {
+                        if (result && result.buffer) {
+                            zip.file(result.name, result.buffer);
+                        }
+                    }
+
+                    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+                    return new Response(zipBuffer, {
+                        headers: {
+                            'Content-Type': 'application/zip',
+                            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(folderName + '.zip')}`,
+                        },
+                    });
+                } catch (err) {
+                    return Response.json({ error: err.message }, { status: 400 });
                 }
-
-                const downloadUrl = `${server}/v2/${file}?token=${token}&download=true&n=${encodeURIComponent(name)}`;
-
-                const upstreamRes = await fetch(downloadUrl, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                        'Origin': server,
-                        'Referer': server + '/',
-                    },
-                });
-
-                if (!upstreamRes.ok) {
-                    return new Response('Failed to download file', { status: 400 });
-                }
-
-                const headers = new Headers(upstreamRes.headers);
-                headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
-
-                return new Response(upstreamRes.body, {
-                    status: upstreamRes.status,
-                    headers,
-                });
             },
         },
     },
