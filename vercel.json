@@ -3,7 +3,8 @@
     "bunVersion": "1.x",
     "functions": {
         "index.js": {
-            "maxDuration": 60
+            "maxDuration": 60,
+            "memory": 1024
         }
     }
 }

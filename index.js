@@ -332,7 +332,6 @@ const server = Bun.serve({
                     const startTime = Date.now();
                     let completedCount = 0;
 
-                    const downloadResults = [];
                     for (const file of files) {
                         if (signal && signal.aborted) {
                             cleanupSession(sessionId);
@@ -361,11 +360,12 @@ const server = Bun.serve({
                                 message: `Failed: ${file.name}`,
                                 elapsed: parseFloat(elapsed),
                             });
-                            downloadResults.push(null);
                             continue;
                         }
 
                         const blob = await res.arrayBuffer();
+                        zip.file(file.name, Buffer.from(blob));
+
                         completedCount++;
                         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
@@ -377,40 +377,44 @@ const server = Bun.serve({
                             message: `Downloading ${completedCount}/${files.length}: ${file.name}`,
                             elapsed: parseFloat(elapsed),
                         });
-
-                        downloadResults.push({
-                            name: file.name,
-                            buffer: Buffer.from(blob),
-                        });
-                    }
-
-                    let packed = 0;
-                    for (const result of downloadResults) {
-                        if (result && result.buffer) {
-                            zip.file(result.name, result.buffer);
-                            packed++;
-                        }
                     }
 
                     await sendProgress(sessionId, {
                         type: 'progress',
                         phase: 'packing',
-                        current: packed,
-                        total: files.length,
-                        message: `Packed ${packed} files into archive`,
+                        current: zip.files.length,
+                        total: Math.max(zip.files.length, files.length),
+                        message: `Packed ${zip.files.length} files into archive`,
                     });
 
-                    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+                    const { readable, writable } = new TransformStream();
+
+                    const writer = writable.getWriter();
+                    const zipStream = zip.generateInternalStream({ type: 'nodebuffer' });
+
+                    zipStream.on('data', async (chunk) => {
+                        await writer.write(chunk);
+                    });
+
+                    zipStream.on('end', () => {
+                        writer.close().catch(() => {});
+                    });
+
+                    zipStream.on('error', (err) => {
+                        writer.abort(err).catch(() => {});
+                    });
+
+                    zipStream.resume();
 
                     await sendProgress(sessionId, {
                         type: 'done',
                         phase: 'complete',
                         elapsed: ((Date.now() - startTime) / 1000).toFixed(1),
-                        zipBytes: zipBuffer.byteLength,
+                        zipBytes: null,
                     });
 
                     cleanupSession(sessionId);
-                    return new Response(zipBuffer, {
+                    return new Response(readable, {
                         headers: {
                             'Content-Type': 'application/zip',
                             'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(folderName + '.zip')}`,
