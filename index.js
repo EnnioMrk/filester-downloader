@@ -291,53 +291,54 @@ const server = Bun.serve({
                     const startTime = Date.now();
                     let completedCount = 0;
 
-                    const fetchPromises = files.map((file, index) => {
+                    const downloadResults = [];
+                    for (const file of files) {
                         const downloadUrl = `${file.server}/v2/${file.file}?token=${file.token}&download=true&n=${encodeURIComponent(file.name)}`;
 
-                        return fetchWithRetry(downloadUrl, {
+                        const res = await fetchWithRetry(downloadUrl, {
                             headers: {
                                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                                 'Origin': file.server,
                                 'Referer': file.server + '/',
                             },
-                        }, MAX_RETRIES, sessionId, 'downloading').then(async res => {
-                            if (!res) {
-                                completedCount++;
-                                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-                                await sendProgress(sessionId, {
-                                    type: 'progress',
-                                    phase: 'downloading',
-                                    current: completedCount,
-                                    total: files.length,
-                                    message: `Failed: ${file.name}`,
-                                    elapsed: parseFloat(elapsed),
-                                });
-                                return null;
-                            }
-                            const blob = await res.arrayBuffer();
+                        }, MAX_RETRIES, sessionId, 'downloading');
+
+                        if (!res) {
                             completedCount++;
                             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
                             await sendProgress(sessionId, {
                                 type: 'progress',
                                 phase: 'downloading',
                                 current: completedCount,
                                 total: files.length,
-                                message: `Downloading ${completedCount}/${files.length}: ${file.name}`,
+                                message: `Failed: ${file.name}`,
                                 elapsed: parseFloat(elapsed),
                             });
+                            downloadResults.push(null);
+                            continue;
+                        }
 
-                            return {
-                                name: file.name,
-                                buffer: Buffer.from(blob),
-                            };
+                        const blob = await res.arrayBuffer();
+                        completedCount++;
+                        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+                        await sendProgress(sessionId, {
+                            type: 'progress',
+                            phase: 'downloading',
+                            current: completedCount,
+                            total: files.length,
+                            message: `Downloading ${completedCount}/${files.length}: ${file.name}`,
+                            elapsed: parseFloat(elapsed),
                         });
-                    });
 
-                    const results = await Promise.all(fetchPromises);
+                        downloadResults.push({
+                            name: file.name,
+                            buffer: Buffer.from(blob),
+                        });
+                    }
 
                     let packed = 0;
-                    for (const result of results) {
+                    for (const result of downloadResults) {
                         if (result && result.buffer) {
                             zip.file(result.name, result.buffer);
                             packed++;
